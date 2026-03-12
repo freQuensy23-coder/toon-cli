@@ -870,6 +870,8 @@ dependencies = [
  "assert_cmd",
  "clap",
  "criterion",
+ "itoa",
+ "memchr",
  "memmap2",
  "predicates",
  "ryu",

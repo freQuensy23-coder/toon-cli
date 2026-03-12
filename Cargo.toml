@@ -9,6 +9,8 @@ simd-json = "0.14"
 clap = { version = "4", features = ["derive"] }
 memmap2 = "0.9"
 ryu = "1"
+itoa = "1"
+memchr = "2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

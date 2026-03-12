@@ -1,4 +1,4 @@
-mod encode;
+use toon_cli::encode;
 
 use clap::Parser;
 use std::fs;
