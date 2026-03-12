@@ -95,6 +95,24 @@ fn bench_encode(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    // Real-world: mock_data.json (3.9 MB deeply nested)
+    let mock_json = include_str!("mock_data.json");
+    let mock_value = parse(mock_json);
+    let mut group = c.benchmark_group("real_world");
+    group.throughput(Throughput::Bytes(mock_json.len() as u64));
+    group.sample_size(50);
+    group.bench_function("mock_data_encode", |b| {
+        b.iter(|| encode(black_box(&mock_value)));
+    });
+    group.bench_function("mock_data_full_pipeline", |b| {
+        b.iter(|| {
+            let mut data = mock_json.as_bytes().to_vec();
+            let value = simd_json::to_owned_value(&mut data).unwrap();
+            encode(black_box(&value))
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(benches, bench_encode);

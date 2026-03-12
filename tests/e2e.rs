@@ -157,7 +157,6 @@ fn simple_flat_object() {
 
 #[test]
 fn empty_object() {
-    // Root empty object → empty output (no keys)
     toon()
         .write_stdin(r#"{}"#)
         .assert()
@@ -259,6 +258,27 @@ fn object_with_empty_array() {
         .stdout("items[0]:\n");
 }
 
+// ─── Mixed primitive arrays (inline, matching toon-js) ──────
+
+#[test]
+fn mixed_primitive_types_inline() {
+    // toon-js: all primitives → inline, regardless of mixed types
+    toon()
+        .write_stdin(r#"[1,"hello",true]"#)
+        .assert()
+        .success()
+        .stdout("[3]: 1,hello,true\n");
+}
+
+#[test]
+fn mixed_with_null_inline() {
+    toon()
+        .write_stdin(r#"[1,null,"x"]"#)
+        .assert()
+        .success()
+        .stdout("[3]: 1,null,x\n");
+}
+
 // ─── Tabular Arrays ────────────────────────────────────────
 
 #[test]
@@ -319,34 +339,25 @@ fn tabular_with_string_needing_quotes() {
 // ─── List Arrays (non-uniform / nested) ─────────────────────
 
 #[test]
-fn list_array_mixed_types() {
-    toon()
-        .write_stdin(r#"[1,"hello",true]"#)
-        .assert()
-        .success()
-        .stdout("[3]:\n  - 1\n  - hello\n  - true\n");
-}
-
-#[test]
 fn list_array_of_objects_different_keys() {
+    // First key on same line as "- "
     toon()
-        .write_stdin(
-            r#"[{"a":1},{"b":2}]"#,
-        )
+        .write_stdin(r#"[{"a":1},{"b":2}]"#)
         .assert()
         .success()
-        .stdout("[2]:\n  -\n    a: 1\n  -\n    b: 2\n");
+        .stdout("[2]:\n  - a: 1\n  - b: 2\n");
 }
 
 #[test]
 fn list_array_objects_with_nested_values() {
+    // First key on same line, rest at depth+1
     toon()
         .write_stdin(
             r#"[{"name":"Alice","addr":{"city":"NY"}},{"name":"Bob","addr":{"city":"LA"}}]"#,
         )
         .assert()
         .success()
-        .stdout("[2]:\n  -\n    name: Alice\n    addr:\n      city: NY\n  -\n    name: Bob\n    addr:\n      city: LA\n");
+        .stdout("[2]:\n  - name: Alice\n    addr:\n      city: NY\n  - name: Bob\n    addr:\n      city: LA\n");
 }
 
 #[test]
@@ -475,7 +486,6 @@ fn version_flag() {
 
 #[test]
 fn large_json_pipe() {
-    // Simulate a large array piped in
     let mut items = Vec::new();
     for i in 0..100 {
         items.push(format!(r#"{{"id":{},"val":"item{}"}}"#, i, i));
@@ -495,7 +505,6 @@ fn large_json_pipe() {
 
 #[test]
 fn string_with_comma_in_primitive_array() {
-    // Strings with commas need quoting in arrays
     toon()
         .write_stdin(r#"["a,b","c"]"#)
         .assert()
@@ -513,32 +522,33 @@ fn string_with_quotes() {
 }
 
 #[test]
-fn number_no_trailing_zeros() {
+fn float_whole_number_becomes_integer() {
+    // toon-js outputs 1.0 as "1"
     toon()
         .write_stdin(r#"{"val":1.0}"#)
         .assert()
         .success()
-        .stdout("val: 1.0\n");
+        .stdout("val: 1\n");
 }
 
 #[test]
 fn tabular_not_eligible_mixed_keys() {
-    // Objects with different keys → list format
+    // Different keys → list format, first key on "- " line
     toon()
         .write_stdin(r#"[{"a":1,"b":2},{"a":3,"c":4}]"#)
         .assert()
         .success()
-        .stdout("[2]:\n  -\n    a: 1\n    b: 2\n  -\n    a: 3\n    c: 4\n");
+        .stdout("[2]:\n  - a: 1\n    b: 2\n  - a: 3\n    c: 4\n");
 }
 
 #[test]
 fn tabular_not_eligible_nested_value() {
-    // Objects with nested object values → list format
+    // Nested object values → list format, first key on "- " line
     toon()
         .write_stdin(r#"[{"a":1,"b":{"x":1}},{"a":2,"b":{"x":2}}]"#)
         .assert()
         .success()
-        .stdout("[2]:\n  -\n    a: 1\n    b:\n      x: 1\n  -\n    a: 2\n    b:\n      x: 2\n");
+        .stdout("[2]:\n  - a: 1\n    b:\n      x: 1\n  - a: 2\n    b:\n      x: 2\n");
 }
 
 #[test]
@@ -566,4 +576,48 @@ fn nested_array_in_object() {
         .assert()
         .success()
         .stdout("matrix[2]:\n  - [2]: 1,2\n  - [2]: 3,4\n");
+}
+
+// ─── List item first-key edge cases (matching toon-js) ──────
+
+#[test]
+fn list_item_first_field_is_object() {
+    // - addr:
+    //     city: NY
+    //   name: Alice
+    toon()
+        .write_stdin(r#"[{"addr":{"city":"NY"},"name":"Alice"}]"#)
+        .assert()
+        .success()
+        .stdout("[1]:\n  - addr:\n      city: NY\n    name: Alice\n");
+}
+
+#[test]
+fn list_item_first_field_is_array() {
+    // - tags[2]: a,b
+    //   name: Alice
+    toon()
+        .write_stdin(r#"[{"tags":["a","b"],"name":"Alice"}]"#)
+        .assert()
+        .success()
+        .stdout("[1]:\n  - tags[2]: a,b\n    name: Alice\n");
+}
+
+#[test]
+fn list_item_empty_object() {
+    toon()
+        .write_stdin(r#"[{}]"#)
+        .assert()
+        .success()
+        .stdout("[1]:\n  -\n");
+}
+
+#[test]
+fn list_item_objects_with_array_values() {
+    // Non-tabular because values contain arrays
+    toon()
+        .write_stdin(r#"[{"a":1,"b":[1,2]},{"a":2,"b":[3,4]}]"#)
+        .assert()
+        .success()
+        .stdout("[2]:\n  - a: 1\n    b[2]: 1,2\n  - a: 2\n    b[2]: 3,4\n");
 }

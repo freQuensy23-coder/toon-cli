@@ -1,7 +1,6 @@
 use simd_json::OwnedValue;
 
 // ─── Lookup table for bytes that need quoting in value context ──
-// Set bit for: : " \ [ ] { } | and control chars (0..32) plus DEL (127)
 static NEEDS_QUOTE_VALUE: [bool; 256] = {
     let mut t = [false; 256];
     t[b':' as usize] = true;
@@ -12,13 +11,20 @@ static NEEDS_QUOTE_VALUE: [bool; 256] = {
     t[b'{' as usize] = true;
     t[b'}' as usize] = true;
     t[b'|' as usize] = true;
-    // Control chars
     let mut i = 0u8;
     while i < 32 {
         t[i as usize] = true;
         i += 1;
     }
     t[127] = true;
+    t
+};
+
+// Key quoting lookup — same as value but also includes space and comma
+static NEEDS_QUOTE_KEY: [bool; 256] = {
+    let mut t = NEEDS_QUOTE_VALUE;
+    t[b' ' as usize] = true;
+    t[b',' as usize] = true;
     t
 };
 
@@ -54,7 +60,7 @@ fn encode_root_array(arr: &[OwnedValue], buf: &mut String) {
             push_tabular_header(buf, len, &keys);
             for item in arr {
                 buf.push('\n');
-                buf.push_str("  ");
+                push_indent(buf, 1);
                 encode_tabular_row(item, &keys, buf);
             }
         }
@@ -63,7 +69,7 @@ fn encode_root_array(arr: &[OwnedValue], buf: &mut String) {
             buf.push(':');
             for item in arr {
                 buf.push('\n');
-                encode_list_item(item, buf, 1);
+                encode_list_item_value(item, buf, 1);
             }
         }
     }
@@ -134,7 +140,7 @@ fn encode_array_field(key: &str, arr: &[OwnedValue], buf: &mut String, depth: us
             buf.push(':');
             for item in arr {
                 buf.push('\n');
-                encode_list_item(item, buf, depth + 1);
+                encode_list_item_value(item, buf, depth + 1);
             }
         }
     }
@@ -170,62 +176,153 @@ fn encode_tabular_row(item: &OwnedValue, keys: &[String], buf: &mut String) {
     }
 }
 
-fn encode_list_item(item: &OwnedValue, buf: &mut String, depth: usize) {
-    push_indent(buf, depth);
+// ─── List item encoding (matching toon-js reference) ─────────
+//
+// For objects: first key-value goes on same line as "- ", rest at depth+1
+// Example:
+//   - name: Alice
+//     age: 30
+//     addr:
+//       city: NY
+
+fn encode_list_item_value(item: &OwnedValue, buf: &mut String, depth: usize) {
     match item {
         OwnedValue::Object(obj) => {
-            buf.push('-');
-            if obj.is_empty() {
-                return;
-            }
-            buf.push('\n');
-            encode_object_fields(item, buf, depth + 1);
+            encode_object_as_list_item(obj, item, buf, depth);
         }
         OwnedValue::Array(arr) => {
-            buf.push_str("- ");
             let arr = arr.as_slice();
-            let len = arr.len();
-            if len == 0 {
-                buf.push_str("[0]:");
-                return;
-            }
-            match classify_array(arr) {
-                ArrayKind::Primitives => {
+            if all_primitives(arr) {
+                // Inline primitive array as list item
+                push_indent(buf, depth);
+                buf.push_str("- ");
+                let len = arr.len();
+                if len == 0 {
+                    buf.push_str("[0]:");
+                } else {
                     push_array_len(buf, len);
                     buf.push_str(": ");
                     encode_inline_values(arr, buf);
                 }
-                ArrayKind::Tabular(keys) => {
-                    push_tabular_header(buf, len, &keys);
-                    let d2 = depth + 2;
-                    for sub in arr {
-                        buf.push('\n');
-                        push_indent(buf, d2);
-                        encode_tabular_row(sub, &keys, buf);
-                    }
-                }
-                ArrayKind::List => {
+            } else {
+                push_indent(buf, depth);
+                buf.push_str("- ");
+                let len = arr.len();
+                if len == 0 {
+                    buf.push_str("[0]:");
+                } else {
                     push_array_len(buf, len);
                     buf.push(':');
                     for sub in arr {
                         buf.push('\n');
-                        encode_list_item(sub, buf, depth + 2);
+                        encode_list_item_value(sub, buf, depth + 1);
                     }
                 }
             }
         }
         _ => {
+            push_indent(buf, depth);
             buf.push_str("- ");
             encode_primitive(item, buf, QC_VALUE);
         }
     }
 }
 
+fn encode_object_as_list_item(
+    obj: &simd_json::owned::Object,
+    _full_value: &OwnedValue,
+    buf: &mut String,
+    depth: usize,
+) {
+    if obj.is_empty() {
+        push_indent(buf, depth);
+        buf.push('-');
+        return;
+    }
+
+    let mut iter = obj.iter();
+    let (first_key, first_val) = iter.next().unwrap();
+
+    // Emit "- " prefix + first key-value on same line
+    push_indent(buf, depth);
+    buf.push_str("- ");
+    encode_first_field(first_key, first_val, buf, depth);
+
+    // Remaining fields at depth + 1
+    for (key, val) in iter {
+        buf.push('\n');
+        push_indent(buf, depth + 1);
+        encode_key_value(key, val, buf, depth + 1);
+    }
+}
+
+/// Encode the first field of a list-item object (on the same line as "- ")
+fn encode_first_field(key: &str, val: &OwnedValue, buf: &mut String, depth: usize) {
+    match val {
+        OwnedValue::Object(obj) => {
+            // - key:
+            //     nested_key: value
+            encode_key(key, buf);
+            buf.push(':');
+            if !obj.is_empty() {
+                buf.push('\n');
+                encode_object_fields(val, buf, depth + 2);
+            }
+        }
+        OwnedValue::Array(arr) => {
+            let arr_slice = arr.as_slice();
+            let len = arr_slice.len();
+            if len == 0 {
+                encode_key(key, buf);
+                buf.push_str("[0]:");
+            } else if all_primitives(arr_slice) {
+                encode_key(key, buf);
+                push_array_len(buf, len);
+                buf.push_str(": ");
+                encode_inline_values(arr_slice, buf);
+            } else if all_objects(arr_slice) {
+                if let Some(keys) = try_tabular(arr_slice) {
+                    // Tabular as first field
+                    encode_key(key, buf);
+                    push_tabular_header(buf, len, &keys);
+                    for item in arr_slice {
+                        buf.push('\n');
+                        push_indent(buf, depth + 2);
+                        encode_tabular_row(item, &keys, buf);
+                    }
+                } else {
+                    // Non-tabular object array
+                    encode_key(key, buf);
+                    push_array_len(buf, len);
+                    buf.push(':');
+                    for item in arr_slice {
+                        buf.push('\n');
+                        encode_list_item_value(item, buf, depth + 2);
+                    }
+                }
+            } else {
+                // Mixed array
+                encode_key(key, buf);
+                push_array_len(buf, len);
+                buf.push(':');
+                for item in arr_slice {
+                    buf.push('\n');
+                    encode_list_item_value(item, buf, depth + 2);
+                }
+            }
+        }
+        _ => {
+            encode_key(key, buf);
+            buf.push_str(": ");
+            encode_primitive(val, buf, QC_VALUE);
+        }
+    }
+}
+
 // ─── Primitive encoding ──────────────────────────────────────
 
-// QuoteContext as u8 for zero-overhead dispatch
 const QC_VALUE: u8 = 0;
-const QC_ARRAY: u8 = 1; // both inline array and tabular cell
+const QC_ARRAY: u8 = 1;
 
 #[inline]
 fn encode_primitive(val: &OwnedValue, buf: &mut String, ctx: u8) {
@@ -270,6 +367,11 @@ fn encode_float(f: f64, buf: &mut String) {
         buf.push('0');
         return;
     }
+    // If it's a whole number, output as integer (matching toon-js)
+    if f.fract() == 0.0 && f.is_finite() && f.abs() < (i64::MAX as f64) {
+        push_i64(buf, f as i64);
+        return;
+    }
     let mut b = ryu::Buffer::new();
     let s = b.format(f);
     if memchr::memchr2(b'e', b'E', s.as_bytes()).is_some() {
@@ -291,8 +393,6 @@ fn encode_string(s: &str, buf: &mut String, ctx: u8) {
     }
 }
 
-/// Fast escape: only 5 sequences (\\, \", \n, \r, \t).
-/// Scans for runs of safe bytes and copies them in bulk.
 #[inline]
 fn escape_into(s: &str, buf: &mut String) {
     let bytes = s.as_bytes();
@@ -307,7 +407,6 @@ fn escape_into(s: &str, buf: &mut String) {
             _ => continue,
         };
         if start < i {
-            // SAFETY: we're slicing on ASCII byte boundaries
             buf.push_str(&s[start..i]);
         }
         buf.push_str(esc);
@@ -324,20 +423,16 @@ fn needs_quoting(s: &str, ctx: u8) -> bool {
     if bytes.is_empty() {
         return true;
     }
-    // Leading/trailing space
     if bytes[0] == b' ' || bytes[bytes.len() - 1] == b' ' {
         return true;
     }
-    // Looks like literal
     if looks_like_literal(bytes) {
         return true;
     }
-    // Scan bytes — all ASCII special chars are single-byte
     for &b in bytes {
         if NEEDS_QUOTE_VALUE[b as usize] {
             return true;
         }
-        // In array/tabular context, comma needs quoting
         if ctx == QC_ARRAY && b == b',' {
             return true;
         }
@@ -399,14 +494,6 @@ fn looks_like_number(bytes: &[u8]) -> bool {
 
 // ─── Key encoding ────────────────────────────────────────────
 
-// Key quoting lookup — same as value but also includes space and comma
-static NEEDS_QUOTE_KEY: [bool; 256] = {
-    let mut t = NEEDS_QUOTE_VALUE;
-    t[b' ' as usize] = true;
-    t[b',' as usize] = true;
-    t
-};
-
 #[inline]
 fn encode_key(key: &str, buf: &mut String) {
     if key_needs_quoting(key) {
@@ -444,27 +531,24 @@ enum ArrayKind {
 fn classify_array(arr: &[OwnedValue]) -> ArrayKind {
     debug_assert!(!arr.is_empty());
 
-    // Fast path: check first element
-    match &arr[0] {
-        OwnedValue::Object(_) => {
-            if let Some(keys) = try_tabular(arr) {
-                ArrayKind::Tabular(keys)
-            } else {
-                ArrayKind::List
-            }
-        }
-        OwnedValue::Array(_) => ArrayKind::List,
-        _ => {
-            // All primitives — check uniform type
-            let first_kind = prim_kind_fast(&arr[0]);
-            for v in &arr[1..] {
-                if !is_primitive(v) || prim_kind_fast(v) != first_kind {
-                    return ArrayKind::List;
-                }
-            }
-            ArrayKind::Primitives
+    // Check if ALL elements are primitives (mixed types OK, matching toon-js)
+    if all_primitives(arr) {
+        return ArrayKind::Primitives;
+    }
+
+    // Check if all elements are arrays of primitives
+    if all_primitive_arrays(arr) {
+        return ArrayKind::List; // array-of-arrays → list with inline sub-arrays
+    }
+
+    // Check if all elements are objects → try tabular
+    if all_objects(arr) {
+        if let Some(keys) = try_tabular(arr) {
+            return ArrayKind::Tabular(keys);
         }
     }
+
+    ArrayKind::List
 }
 
 #[inline]
@@ -472,18 +556,25 @@ fn is_primitive(v: &OwnedValue) -> bool {
     matches!(v, OwnedValue::Static(_) | OwnedValue::String(_))
 }
 
-// Faster discriminant check — just 2 bits
 #[inline]
-fn prim_kind_fast(v: &OwnedValue) -> u8 {
-    match v {
-        OwnedValue::String(_) => 0,
-        OwnedValue::Static(s) => match s {
-            simd_json::StaticNode::Null => 1,
-            simd_json::StaticNode::Bool(_) => 2,
-            _ => 3, // number
-        },
-        _ => 4,
-    }
+fn all_primitives(arr: &[OwnedValue]) -> bool {
+    arr.iter().all(|v| is_primitive(v))
+}
+
+#[inline]
+fn all_objects(arr: &[OwnedValue]) -> bool {
+    arr.iter().all(|v| matches!(v, OwnedValue::Object(_)))
+}
+
+#[inline]
+fn all_primitive_arrays(arr: &[OwnedValue]) -> bool {
+    arr.iter().all(|v| {
+        if let OwnedValue::Array(a) = v {
+            all_primitives(a.as_slice())
+        } else {
+            false
+        }
+    })
 }
 
 fn try_tabular(arr: &[OwnedValue]) -> Option<Vec<String>> {
@@ -497,7 +588,6 @@ fn try_tabular(arr: &[OwnedValue]) -> Option<Vec<String>> {
         return None;
     }
 
-    // All values in first must be primitive
     for v in first_obj.values() {
         if !is_primitive(v) {
             return None;
@@ -505,7 +595,6 @@ fn try_tabular(arr: &[OwnedValue]) -> Option<Vec<String>> {
     }
 
     let key_count = keys.len();
-    // Check remaining objects
     for item in &arr[1..] {
         let obj = match item {
             OwnedValue::Object(o) => o,
@@ -514,7 +603,6 @@ fn try_tabular(arr: &[OwnedValue]) -> Option<Vec<String>> {
         if obj.len() != key_count {
             return None;
         }
-        // Check keys match and values are primitive
         for (a, (b, v)) in keys.iter().zip(obj.iter()) {
             if a.as_str() != b {
                 return None;
@@ -530,7 +618,6 @@ fn try_tabular(arr: &[OwnedValue]) -> Option<Vec<String>> {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-// Pre-computed indent strings for depths 0..16
 static INDENTS: [&str; 17] = [
     "",
     "  ",
