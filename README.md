@@ -11,6 +11,13 @@ TOON is a compact serialization format for LLM contexts — same data, fewer tok
 brew install freQuensy23-coder/tap/toon-cli
 ```
 
+**Debian/Ubuntu**:
+```bash
+# amd64
+wget https://github.com/freQuensy23-coder/toon-cli/releases/latest/download/toon-cli_0.1.0_amd64.deb
+sudo dpkg -i toon-cli_0.1.0_amd64.deb
+```
+
 **Cargo**:
 ```bash
 cargo install --path .
