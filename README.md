@@ -6,11 +6,17 @@ TOON is a compact serialization format for LLM contexts — same data, fewer tok
 
 ## Install
 
+**Homebrew** (macOS / Linux):
+```bash
+brew install freQuensy23-coder/tap/toon-cli
+```
+
+**Cargo**:
 ```bash
 cargo install --path .
 ```
 
-Or grab a binary from [Releases](https://github.com/freQuensy23-coder/toon-cli/releases).
+**Binary**: grab from [Releases](https://github.com/freQuensy23-coder/toon-cli/releases).
 
 ## Usage
 
@@ -39,7 +45,9 @@ $ echo '[{"id":1,"name":"Alice","role":"admin"},{"id":2,"name":"Bob","role":"use
 
 ## Speed
 
-10 MB JSON (100k rows) converts in ~47ms. See [TOON_SPEC.md](TOON_SPEC.md) for format details.
+10 MB JSON (100k rows) converts in ~47ms. Output is byte-identical to the reference [toon-js](https://github.com/toon-format/toon) implementation.
+
+Run `benches/compare.sh` to verify against Node.js SDK. See [TOON_SPEC.md](TOON_SPEC.md) for format details.
 
 ## License
 
